@@ -1,0 +1,84 @@
+# Renders <date>/hero.png from <date>/hero.html whenever a hero.html is added or changed.
+# Used by the weekly Inserv360 cyber email (the Monday run uploads hero.html via Zapier).
+name: Render hero image
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/hero.html"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render-hero
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install fonts (Poppins + Inter)
+        run: |
+          mkdir -p ~/.local/share/fonts
+          cd ~/.local/share/fonts
+          for f in Poppins-Bold Poppins-SemiBold Poppins-Regular; do
+            curl -fsSL -o "$f.ttf" "https://github.com/google/fonts/raw/main/ofl/poppins/$f.ttf"
+          done
+          curl -fsSL -o "Inter.ttf" "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
+          fc-cache -f
+
+      - name: Install Playwright
+        run: |
+          pip install playwright==1.47.0
+          python -m playwright install --with-deps chromium
+
+      - name: Render hero.png files
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          python - <<'EOF'
+          import os, pathlib, subprocess
+          from playwright.sync_api import sync_playwright
+
+          before = os.environ.get("BEFORE", "")
+          changed = set()
+          if before and set(before) != {"0"}:
+              out = subprocess.run(["git", "diff", "--name-only", before, "HEAD", "--", "*/hero.html"],
+                                   capture_output=True, text=True).stdout.split()
+              changed = {pathlib.Path(p) for p in out}
+          # also render any hero.html that has no hero.png yet
+          for h in pathlib.Path(".").glob("*/hero.html"):
+              if not (h.parent / "hero.png").exists():
+                  changed.add(h)
+          changed = sorted(p for p in changed if p.exists())
+          print("rendering:", [str(p) for p in changed])
+
+          with sync_playwright() as pw:
+              b = pw.chromium.launch()
+              for h in changed:
+                  pg = b.new_page(viewport={"width": 1200, "height": 600})
+                  pg.goto(h.resolve().as_uri())
+                  pg.evaluate("document.fonts.ready")
+                  pg.wait_for_timeout(500)
+                  pg.screenshot(path=str(h.parent / "hero.png"))
+                  pg.close()
+              b.close()
+          EOF
+
+      - name: Commit rendered images
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*/hero.png'
+          if git diff --cached --quiet; then
+            echo "Nothing new to commit"
+          else
+            git commit -m "Render hero.png"
+            git push
+          fi
