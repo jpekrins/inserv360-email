@@ -17,11 +17,16 @@ concurrency:
 
 jobs:
   render:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to Ubuntu 26 / Python 3.14, which broke the Playwright install.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Install fonts (Poppins + Inter)
         run: |
